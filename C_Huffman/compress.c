@@ -228,7 +228,7 @@ int main(int argv, char ** argc) {
             printf("\n");
         }
     // Compute lowest-cost differential approach
-    printf("Computing most efficient base...\n");
+    /*printf("Computing most efficient base...\n");
     unsigned long total_cost = 0;
     for (int curr_frame = 1; curr_frame < get_num_frames(&source_info); curr_frame++) {
         // Try computing differentials against every frame
@@ -252,6 +252,36 @@ int main(int argv, char ** argc) {
     total_cost /= 8; // Convert output size to bytes
     total_cost += get_frame_size(); // Add space needed for first frame
     printf("Optimized ompression ratio: %f (%ld bytes in, %ld bytes out)\nSaving file...\n", (float)total_cost / (float)source_info.st_size, source_info.st_size, total_cost);
+    */// Compute lowest-cost differential on differential approach
+    printf("Computing most efficient MLD (multi-level differential)...\n");
+    // NOTE: Use frame_diffs
+    unsigned long total_MLD_cost = 0;
+    for (int curr_diff = 0; curr_diff < get_num_frames(&source_info) - 1; curr_diff++) {
+        // Compute the cost of a direct differential
+        int best_prior_diff = curr_diff;
+        unsigned long best_cost = 0;
+        for (int pixel = 0; pixel < get_frame_size(); pixel++)
+            best_cost += codes[(uint8_t)frame_diffs[curr_diff][pixel]].code_length;
+        unsigned long orig_best_cost = best_cost; // DEBUG *** *** ***
+        // Look at each past frame differential, and find the best match to this differential
+        for (int backtest_fdiff_idx = 0; backtest_fdiff_idx < curr_diff; backtest_fdiff_idx++) {
+            unsigned long backtest_fdiff_cost = 0;
+            for (int pixel = 0; pixel < get_frame_size(); pixel++)
+                backtest_fdiff_cost += codes[(uint8_t)(frame_diffs[curr_diff][pixel] + frame_diffs[backtest_fdiff_idx][pixel])].code_length;
+            if (backtest_fdiff_cost < best_cost) {
+                best_prior_diff = backtest_fdiff_idx;
+                best_cost = backtest_fdiff_cost;
+            }
+        }
+        total_MLD_cost += best_cost;
+        if (orig_best_cost == best_cost)
+            printf("No more efficient diff available for diff %d\n", curr_diff);
+        else
+            printf("Most efficient prior diff for diff %d is diff %d at cost %lu vs original cost %lu\n", curr_diff, best_prior_diff, best_cost, orig_best_cost);
+    }
+    total_MLD_cost /= 8; // Convert output size to bytes
+    total_MLD_cost += get_frame_size(); // Add space needed for first frame
+    printf("Optimized ompression ratio: %f (%ld bytes in, %ld bytes out)\nSaving file...\n", (float)total_MLD_cost / (float)source_info.st_size, source_info.st_size, total_MLD_cost);
     // Compute output file size
     unsigned long out_size = 0;
     for (int i = 0; i < NUM_SYMBOLS; i++)
