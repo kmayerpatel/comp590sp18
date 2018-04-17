@@ -123,15 +123,94 @@ int main(int argv, char ** argc) {
     // Compute all frames >1 as diffs off frame 1 and count
     printf("Loaded '%s'. Generating frame diffs and probabilities...\n", argc[1]);
     uint8_t (*frame_diffs)[get_frame_size()] = malloc(get_num_frames(&source_info) * get_frame_size());
-    long occurances[MAX_PIXEL_VAL + 0] = {0};
+    unsigned long occurances[MAX_PIXEL_VAL] = {0};
     for (int frame = 1; frame < get_num_frames(&source_info); frame++) {
         uint8_t * prev_frame = get_frame_start(frame - 1, source_data);
         uint8_t * curr_frame = get_frame_start(frame, source_data);
         for (int pixel = 0; pixel < get_frame_size(); pixel++) {
             uint8_t diff = prev_frame[pixel] - curr_frame[pixel];
-            frame_diffs[frame][pixel] = diff;
+            frame_diffs[frame - 1][pixel] = diff;
             occurances[diff]++;
         }
+    }
+    // Compute easily-est compressible choice of back-differentials
+    // Cost in PreH-MLD? Post-Huffman size
+    // Can't run Huffman on subset. What makes Huffman small? Least-smooth distribution/differentials similar to past frames
+    printf("Computing best differential playback series");
+    //unsigned long total_MLD_cost = 0;
+    uint8_t (*better_frame_diffs)[get_frame_size()] = malloc(get_num_frames(&source_info) * get_frame_size());
+    unsigned long target_occurances[MAX_PIXEL_VAL] = {0};
+    // Load inital target
+    for (int i = 0; i < MAX_PIXEL_VAL; i++) {
+        target_occurances[i] = occurances[i];
+        target_occurances[i] /= get_num_frames(&source_info);
+    }
+    for (int i = 0; i < MAX_PIXEL_VAL; i++) {
+        printf("Original occurances of %d: %lu\n", i, target_occurances[i]);
+    }
+    for (int curr_diff = 0; curr_diff < get_num_frames(&source_info) - 1; curr_diff++) {
+        // Compute misdistribution of a direct differential
+        int best_prior_diff = curr_diff;
+        unsigned long best_occurances[MAX_PIXEL_VAL] = {0};
+        for (int pixel = 0; pixel < get_frame_size(); pixel++)
+            best_occurances[(uint8_t)frame_diffs[curr_diff][pixel]]++;
+        unsigned long mismatch_count = 0;
+        for (int i = 0; i < MAX_PIXEL_VAL; i++) {
+            long mismatches = target_occurances[i] - best_occurances[i] * get_num_frames(&source_info);
+            // Mismatch count is always positive
+            if (mismatches > 0)
+                mismatch_count += mismatches;
+            else
+                mismatch_count += -1 * mismatches;
+        }
+        unsigned long orig_mismatch_count = mismatch_count;
+        unsigned long trailing_mismatch_count = -1; // Underflow to max of range
+        // Look at each past frame differential, and find the best match to this differential
+        for (int backtest_fdiff_idx = 0; backtest_fdiff_idx < curr_diff; backtest_fdiff_idx++) {
+            unsigned long local_occurances[MAX_PIXEL_VAL] = {0};
+            for (int pixel = 0; pixel < get_frame_size(); pixel++)
+                local_occurances[(uint8_t)(frame_diffs[curr_diff][pixel] - frame_diffs[backtest_fdiff_idx][pixel])]++;
+            unsigned long local_mismatch_count = 0;
+            for (int i = 0; i < MAX_PIXEL_VAL; i++) {
+                long mismatches = target_occurances[i] - local_occurances[i] * get_num_frames(&source_info);
+                // Mismatch count is always positive
+                if (mismatches > 0)
+                    local_mismatch_count += mismatches;
+                else
+                    local_mismatch_count += -1 * mismatches;
+            }
+            if (local_mismatch_count < mismatch_count) {
+                memcpy(best_occurances, local_occurances, sizeof(local_occurances));
+                best_prior_diff = backtest_fdiff_idx;
+                mismatch_count = local_mismatch_count;
+            }
+            if (local_mismatch_count < trailing_mismatch_count)
+                trailing_mismatch_count = local_mismatch_count;
+        }
+        // Update and normalize distribution
+        for (int i = 0; i < MAX_PIXEL_VAL; i++)
+            target_occurances[i] = target_occurances[i] * .8 + .2 * best_occurances[i];
+        // Write best differential
+        for (int p = 0; p < get_frame_size(); p++)
+            better_frame_diffs[curr_diff][p] = frame_diffs[curr_diff][p] - frame_diffs[best_prior_diff][p];
+        // DEBUG
+        if (mismatch_count == orig_mismatch_count)
+            printf("No more efficient diff available for diff %d (best competing is %lu vs %lu)\n", curr_diff, trailing_mismatch_count, mismatch_count);
+        else
+            printf("Most efficient prior diff for diff %d is diff %d at cost %lu vs original cost %lu\n", curr_diff, best_prior_diff, mismatch_count, orig_mismatch_count);
+    }
+    // Compute new occurance mapping
+    for (int i = 0; i < MAX_PIXEL_VAL; i++) {
+        printf("Original occurances of %d: %lu\n", i, occurances[i]);
+        occurances[i] = 0;
+    }
+    for (int frame = 1; frame < get_num_frames(&source_info); frame++) {
+        for (int pixel = 0; pixel < get_frame_size(); pixel++) {
+            occurances[better_frame_diffs[frame][pixel]]++;
+        }
+    }
+    for (int i = 0; i < MAX_PIXEL_VAL; i++) {
+        printf("Improved occurances of %d: %lu\n", i, occurances[i]);
     }
     printf("Generating Huffman tree...\n");
     // Setup memory for the Huffman tree
@@ -252,8 +331,8 @@ int main(int argv, char ** argc) {
     total_cost /= 8; // Convert output size to bytes
     total_cost += get_frame_size(); // Add space needed for first frame
     printf("Optimized ompression ratio: %f (%ld bytes in, %ld bytes out)\nSaving file...\n", (float)total_cost / (float)source_info.st_size, source_info.st_size, total_cost);
-    */// Compute lowest-cost differential on differential approach
-    printf("Computing most efficient MLD (multi-level differential)...\n");
+    */
+    /*printf("Computing most efficient MLD (multi-level differential)...\n");
     // NOTE: Use frame_diffs
     unsigned long total_MLD_cost = 0;
     for (int curr_diff = 0; curr_diff < get_num_frames(&source_info) - 1; curr_diff++) {
@@ -282,6 +361,7 @@ int main(int argv, char ** argc) {
     total_MLD_cost /= 8; // Convert output size to bytes
     total_MLD_cost += get_frame_size(); // Add space needed for first frame
     printf("Optimized ompression ratio: %f (%ld bytes in, %ld bytes out)\nSaving file...\n", (float)total_MLD_cost / (float)source_info.st_size, source_info.st_size, total_MLD_cost);
+    */
     // Compute output file size
     unsigned long out_size = 0;
     for (int i = 0; i < NUM_SYMBOLS; i++)
