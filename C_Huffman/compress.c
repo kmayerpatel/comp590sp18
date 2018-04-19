@@ -132,45 +132,57 @@ int main(int argv, char ** argc) {
             occurances[diff]++;
         }
     }
+    unsigned long compute_abs_diff(unsigned long target_occurances[NUM_SYMBOLS], unsigned long local_occurances[NUM_SYMBOLS], unsigned int idx) {
+        unsigned long total_occurances = get_num_frames(&source_info) * get_frame_size();
+        unsigned long scaled_target_occurances = target_occurances[idx] * target_occurances[idx] / total_occurances;
+        return abs(scaled_target_occurances - local_occurances[idx] * get_num_frames(&source_info));
+    }
     // Compute easily-est compressible choice of back-differentials
     printf("Computing best differential playback series (GOT)...\n");
     uint8_t (*better_frame_diffs)[get_frame_size()] = malloc((get_num_frames(&source_info) - 1) * get_frame_size());
     unsigned int better_frame_diff_basis[get_num_frames(&source_info) - 1];
     for (int curr_diff = 0; curr_diff < get_num_frames(&source_info) - 1; curr_diff++) {
         // Compute deviation of a direct differential from the global differential
-        int best_prior_diff = curr_diff;
         unsigned long base_occurances[NUM_SYMBOLS] = {0};
         for (int pixel = 0; pixel < get_frame_size(); pixel++)
-            base_occurances[(uint8_t)frame_diffs[curr_diff][pixel]]++;
+            base_occurances[frame_diffs[curr_diff][pixel]]++;
         unsigned long mismatch_count = 0;
         for (int i = 0; i < NUM_SYMBOLS; i++)
-            mismatch_count += abs(occurances[i] - base_occurances[i] * get_num_frames(&source_info));
+            mismatch_count += compute_abs_diff(occurances, base_occurances, i);
         // Save/make space for some statistical-tracking variables
+        unsigned int best_prior_diff = curr_diff;
         unsigned long orig_mismatch_count = mismatch_count;
         unsigned long trailing_mismatch_count = -1; // Underflow to max of range
         // Minimize deviation by exhaustive search for fitting basis
         for (int backtest_fdiff_idx = 0; backtest_fdiff_idx < curr_diff; backtest_fdiff_idx++) {
             unsigned long local_occurances[NUM_SYMBOLS] = {0};
             for (int pixel = 0; pixel < get_frame_size(); pixel++)
-                local_occurances[(uint8_t)(frame_diffs[curr_diff][pixel] - frame_diffs[backtest_fdiff_idx][pixel])]++;
+                local_occurances[(uint8_t)(better_frame_diffs[curr_diff][pixel] - frame_diffs[backtest_fdiff_idx][pixel])]++;
             unsigned long local_mismatch_count = 0;
             for (int i = 0; i < NUM_SYMBOLS; i++)
-                local_mismatch_count += abs(occurances[i] - local_occurances[i] * get_num_frames(&source_info));
+                local_mismatch_count += compute_abs_diff(occurances, local_occurances, i);
             if (local_mismatch_count < mismatch_count) {
                 best_prior_diff = backtest_fdiff_idx;
                 mismatch_count = local_mismatch_count;
             }
+            //printf("Using diff %d as a basis for diff %d would have mismatch count %lu\n", backtest_fdiff_idx, curr_diff, local_mismatch_count);
             // Update stats
             if (local_mismatch_count < trailing_mismatch_count)
                 trailing_mismatch_count = local_mismatch_count;
         }
-        // Record the residual and basis index
-        for (int p = 0; p < get_frame_size(); p++)
-            better_frame_diffs[curr_diff][p] = frame_diffs[curr_diff][p] - frame_diffs[best_prior_diff][p];
-        better_frame_diff_basis[curr_diff] = best_prior_diff;
+        // Record the residual and basis index or the original diff
+        if (mismatch_count != orig_mismatch_count) {
+            for (int p = 0; p < get_frame_size(); p++)
+                better_frame_diffs[curr_diff][p] = better_frame_diffs[curr_diff][p] - frame_diffs[best_prior_diff][p];
+            better_frame_diff_basis[curr_diff] = best_prior_diff;
+        }
+        else {
+            memcpy(better_frame_diffs[curr_diff], frame_diffs[curr_diff], get_frame_size());
+            better_frame_diff_basis[curr_diff] = -1;
+        }
         if (PRINT) {
             if (mismatch_count == orig_mismatch_count)
-                printf("No more efficient diff available for diff %d (best competing is %lu vs %lu)\n", curr_diff, trailing_mismatch_count, mismatch_count);
+                printf("No more efficient diff available for diff %d (best competing is %lu vs %lu)\n", curr_diff, trailing_mismatch_count, orig_mismatch_count);
             else
                 printf("Most efficient prior diff for diff %d is diff %d at cost %lu vs original cost %lu\n", curr_diff, best_prior_diff, mismatch_count, orig_mismatch_count);
         }
@@ -320,8 +332,11 @@ int main(int argv, char ** argc) {
         // Look at each past frame differential, and find the best match to this differential
         for (int backtest_fdiff_idx = 0; backtest_fdiff_idx < curr_diff; backtest_fdiff_idx++) {
             unsigned long backtest_fdiff_cost = 0;
-            for (int pixel = 0; pixel < get_frame_size(); pixel++)
-                backtest_fdiff_cost += codes[(uint8_t)abs(better_frame_diffs[curr_diff][pixel] - better_frame_diffs[backtest_fdiff_idx][pixel])].code_length;
+            for (int pixel = 0; pixel < get_frame_size(); pixel++) {
+                uint8_t diff = better_frame_diffs[curr_diff][pixel] - better_frame_diffs[backtest_fdiff_idx][pixel];
+                //printf("Diff btn %d and %d is %u\n", curr_diff, backtest_fdiff_idx, diff);
+                backtest_fdiff_cost += codes[diff].code_length;//(uint8_t)(better_frame_diffs[curr_diff][pixel] - better_frame_diffs[backtest_fdiff_idx][pixel])].code_length;
+            }
             if (backtest_fdiff_cost < best_cost) {
                 best_prior_diff = backtest_fdiff_idx;
                 best_cost = backtest_fdiff_cost;
