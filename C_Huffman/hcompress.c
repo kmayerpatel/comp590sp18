@@ -121,16 +121,12 @@ int main(int argv, char ** argc) {
     }
 //source_info.st_size = get_frame_size() * 15; // HACK HACK HACK HACK HACK HACK **** DANGER ****
     // Compute all frames >1 as diffs off frame 1 and count
-    printf("Loaded '%s'. Generating frame diffs and probabilities...\n", argc[1]);
-    uint8_t (*frame_diffs)[get_frame_size()] = malloc(get_num_frames(&source_info) * get_frame_size());
+    printf("Loaded '%s'. Generating pixel probabilities...\n", argc[1]);
     unsigned long occurances[NUM_SYMBOLS] = {0};
-    for (int frame = 1; frame < get_num_frames(&source_info); frame++) {
-        uint8_t * prev_frame = get_frame_start(frame - 1, source_data);
+    for (int frame = 0; frame < get_num_frames(&source_info); frame++) {
         uint8_t * curr_frame = get_frame_start(frame, source_data);
         for (int pixel = 0; pixel < get_frame_size(); pixel++) {
-            uint8_t diff = prev_frame[pixel] - curr_frame[pixel];
-            frame_diffs[frame - 1][pixel] = diff;
-            occurances[diff]++;
+            occurances[curr_frame[pixel]]++;
         }
     }
     /*
@@ -331,7 +327,7 @@ int main(int argv, char ** argc) {
     total_cost /= 8; // Convert output size to bytes
     total_cost += get_frame_size(); // Add space needed for first frame
     printf("Optimized ompression ratio: %f (%ld bytes in, %ld bytes out)\nSaving file...\n", (float)total_cost / (float)source_info.st_size, source_info.st_size, total_cost);
-    */
+    
     printf("Computing second-pass GOT ...\n");
     unsigned long total_MLD_cost = 0;
     for (int curr_diff = 0; curr_diff < get_num_frames(&source_info) - 1; curr_diff++) {
@@ -371,28 +367,28 @@ int main(int argv, char ** argc) {
     total_MLD_cost += get_frame_size(); // Add space needed for first frame
     total_MLD_cost += 2 * (get_num_frames(&source_info) - 1) * sizeof(unsigned int); // Add space needed for both levels of basis-pointers
     printf("Optimized compression ratio: %f (%ld bytes in, %ld bytes out)\n", (float)total_MLD_cost / (float)source_info.st_size, source_info.st_size, total_MLD_cost);
+    */
     // Compute output file size
     unsigned long out_size = 0;
     for (int i = 0; i < NUM_SYMBOLS; i++)
         out_size += occurances[i] * codes[i].code_length;
     out_size /= 8; // Convert output size to bytes
-    out_size += get_frame_size(); // Add space needed for first frame
+    //out_size += get_frame_size(); // Add space needed for first frame
     //out_size += (get_num_frames(&source_info) - 1) * sizeof(unsigned int); // Add space needed for basis-pointers
     printf("Compression ratio: %f (%ld bytes in, %ld bytes out)\nSaving file...\n", (float)out_size / (float)source_info.st_size, source_info.st_size, out_size);
     // Setup output
-    unsigned int output_fn_len = strlen(argc[1]) + 5;
+    unsigned int output_fn_len = strlen(argc[1]) + 4;
     char output_fn[output_fn_len];
-    snprintf(output_fn, output_fn_len, "%s.hdc", argc[1]);
+    snprintf(output_fn, output_fn_len, "%s.hc", argc[1]);
     int out_fd = open(output_fn, O_RDWR | O_CREAT);
     if (out_fd == -1) {
         printf("Unable to open file '%s' for writing: %s\n", argc[2], strerror(errno));
         return 1;
     }
-    /*
-    if (ftruncate(out_fd, out_size) == -1) {
+    /*if (ftruncate(out_fd, out_size) == -1) {
         printf("Unable to expand file '%s' to %ld bytes: %s\n", argc[2], out_size, strerror(errno));
         return 1;
-    }
+    }*
     uint8_t * out_data = mmap(NULL, out_size, PROT_WRITE, MAP_SHARED, out_fd, 0);
     if (out_data == MAP_FAILED) {
         printf("Unable to mmap output file: %s\n", strerror(errno));
@@ -402,14 +398,14 @@ int main(int argv, char ** argc) {
         printf("Unable to seek output file: %s\n", strerror(errno));
         return 1;
     }
-    // Dump first frame
-    write(out_fd, source_data, get_frame_size(&source_info));
-    // Encode all differential frames using Huffman code table
+    // Encode all frames (excluding the first) using Huffman code table
     uint16_t buffer = 0;
     int buffer_len = 0;
-    for (int frame = 0; frame < get_num_frames(&source_info) - 1; frame++) {
+    for (int frame = 0; frame < get_num_frames(&source_info); frame++) {
+        //printf("Saving frame %d\n", frame);
+        uint8_t * curr_frame = get_frame_start(frame, source_data);
         for (int pixel = 0; pixel < get_frame_size(); pixel++) {
-            struct huff_code * pair = &codes[frame_diffs[frame][pixel]];
+            struct huff_code * pair = &codes[curr_frame[pixel]];
             // Buffer pair.code into write stream
             write(out_fd, pair->code, pair->code_length / 8);
             buffer |= pair->code[pair->code_length / 8] >> buffer_len; // Copy over residual
@@ -428,7 +424,7 @@ int main(int argv, char ** argc) {
     //munmap(out_data, out_size);
     for (int i = 0; i < NUM_SYMBOLS; i++)
         free(codes[i].code);
-    free(frame_diffs);
+    //free(frame_diffs);
     //free(better_frame_diffs);
     return 0;
 }
